@@ -1,6 +1,29 @@
 # Validation status
 
-Prepared for Apple TV 4K (2022), tvOS 16+.
+Prepared for Apple TV 4K (2022), user-confirmed tvOS 17. Deployment target remains tvOS 16; Discover uses native menus on tvOS 17+ and fallback pickers on tvOS 16.
+
+## Current release: 0.2.0, build 2
+
+- Successful build: https://github.com/aworan01/aworan/actions/runs/43689661882
+- Built source commit: `cd5e969`.
+- Seven Swift core tests passed, including catalogue sorting, missing metadata, skip-marker bounds, explicit absent markers and post-credit scene preservation.
+- Three IPA packaging tests passed on the Mac runner and locally on Windows.
+- Full Apple TV SwiftUI/VLCKit app compiled and linked successfully. Pinned native libraries were restored from the previously built cache.
+- Downloaded IPA verified: ZIP integrity, ARM64 Mach-O, AppleTVOS physical-device platform, device family 3, minimum tvOS 16.0, version 0.2.0/build 2, bundled CA certificates and no code signature.
+- IPA size: 18,945,650 bytes. SHA-256: `5ea836edbbcc4cdf684216674bc8b0a68bf660aa541eef989d5c8e1ae0101500`.
+- No simulator UI review or physical Apple TV installation/playback test was performed. Successful compilation is not evidence of verified remote focus or playback on tvOS 17.
+
+### New-feature acceptance checks on tvOS 17
+
+1. Navigate every top tab; focus posters and verify the backdrop changes. Open and return from title details.
+2. In Discover, switch Movies/Series and genres; test catalogue/title/year/rating ordering, reset, empty results and retry. Switch profiles and confirm saved selections are isolated.
+3. Verify controls hide after seven idle seconds while playing. Reveal them, preview a seek with Left/Right, confirm with Select, cancel with Back, and move focus away from the timeline.
+4. Switch audio and subtitle tracks, disable subtitles, change playback speed and open next-episode source selection from both the transport and settings panel.
+5. With a title having IntroDB markers, test intro/outro buttons while transport controls are shown and hidden. Verify a reported post-credit scene is preserved. Test titles with no markers and a timing-service failure; playback should continue without skip buttons.
+
+IntroDB contract checked against https://api.introdb.app/reference/get-segments/. Movie requests use `is_movie=true`; episode requests use season/episode. Timing is community-sourced and can differ between video releases. Discover sorts only the loaded Cinemeta results; full TMDB filters are outside this release.
+
+## Earlier 0.1.0 baseline
 
 ## Checks performed locally on Windows
 
