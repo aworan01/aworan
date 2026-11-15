@@ -14,6 +14,15 @@ import VLCKitSPM
     @Published var ended = false
     @Published var segments: SkipSegments?
     @Published var speed: Float = 1
+    @Published var progress = TorrentProgress()
+    @Published var diagnostics = "Waiting for player input"
+    @Published var transportIssue: String?
+    @Published var startupBuffered: Int64 = 0
+    @Published var startupTarget: Int64 = 0
+    @Published var cacheLimitGB: Int
+    @Published var decodedFrames = 0
+    private var statusTask: Task<Void, Never>?
+    private var openedAt: Date?
     let request: PlaybackRequest
     private let library: LibraryStore
     private var engine: TorrentEngine?
@@ -25,10 +34,19 @@ import VLCKitSPM
     private var closed = false
     private var selectedSource: StreamSource
     init(request: PlaybackRequest, library: LibraryStore) {
-        self.request = request; self.library = library; selectedSource = request.source
+        self.request = request; self.library = library; selectedSource = request.source; cacheLimitGB = library.cacheGB
     }
     func begin() {
         guard task == nil else { return }
+        statusTask = Task {
+            while !Task.isCancelled && !closed {
+                if let engine {
+                    do { progress = try await engine.progress() }
+                    catch { if !closed { transportIssue = error.localizedDescription } }
+                }
+                try? await Task.sleep(nanoseconds: 1_000_000_000)
+            }
+        }
         segmentTask = Task {
             let result = await Catalogue.shared.segments(request.media, episode: request.episode)
             if !Task.isCancelled && !closed { segments = result }
@@ -78,19 +96,53 @@ import VLCKitSPM
         try Task.checkCancellation()
         try await engine.select(file)
         selectedSource.fileIdx = file.id
-        message = "Buffering \((file.name as NSString).lastPathComponent)…"
+        message = "Buffering start of video…"
+        let head = min(file.size, 4 * 1024 * 1024)
+        let tail = min(max(0, file.size - head), 512 * 1024)
+        startupTarget = head + tail; startupBuffered = 0
+        try await warm(engine, offset: 0, count: head)
+        if tail > 0 {
+            message = "Reading video index…"
+            try await warm(engine, offset: file.size - tail, count: tail)
+        }
+        message = "Opening buffered video…"
         let server = RangeServer(engine: engine, file: file)
-        server.onError = { [weak self] message in Task { @MainActor in if self?.closed == false { self?.error = message } } }
+        server.onError = { [weak self] message in Task { @MainActor in if self?.closed == false { self?.transportIssue = message } } }
         self.server = server
         let url = try await server.start()
         try Task.checkCancellation()
         play(url)
+    }
+    private func warm(_ engine: TorrentEngine, offset: Int64, count: Int64) async throws {
+        let id = UUID().uuidString
+        do {
+            var read: Int64 = 0
+            while read < count {
+                try Task.checkCancellation()
+                let data = try await engine.read(offset: offset + read, count: Int(min(256 * 1024, count - read)), requestID: id)
+                read += Int64(data.count); startupBuffered += Int64(data.count)
+            }
+            await engine.finishRequest(id)
+        } catch { await engine.finishRequest(id); throw error }
+    }
+    func increaseStorage() {
+        let next = min(32, max(cacheLimitGB + 1, cacheLimitGB * 2))
+        guard next > cacheLimitGB, let engine else { return }
+        cacheLimitGB = next; library.cacheGB = next
+        Task {
+            await engine.setCacheLimit(gigabytes: next)
+            if player.state == .error {
+                error = nil; transportIssue = nil; openedAt = Date()
+                player.stop(); player.play()
+            }
+        }
     }
     private func play(_ url: URL) {
         guard !closed else { return }
         let media = VLCMedia(url: url)
         media.addOption(":network-caching=2000")
         player.media = media
+        openedAt = Date()
         ready = true
         // PlayerSurface attaches the drawable before calling startVideo().
     }
@@ -102,13 +154,34 @@ import VLCKitSPM
         if at.isFinite && at >= 0 { position = at }
         if length.isFinite && length > 0 { duration = length }
         playing = player.isPlaying
+        let state = playerState
+        if let media = player.media {
+            let stats = media.statistics
+            decodedFrames = Int(stats.decodedVideo)
+            let tracks = media.tracksInformation.compactMap { item -> String? in
+                guard let row = item as? [String: Any],
+                      let codec = row[VLCMediaTracksInformationCodec] as? NSNumber,
+                      let type = row[VLCMediaTracksInformationType] as? String else { return nil }
+                let value = codec.uint32Value
+                let fourCC = String(bytes: (0..<4).map { UInt8((value >> ($0 * 8)) & 255) }, encoding: .ascii) ?? "unknown"
+                return "\(type): \(fourCC)"
+            }.joined(separator: " · ")
+            diagnostics = "VLC: \(state) · Input \(stats.readBytes) bytes · Video \(stats.decodedVideo) decoded / \(stats.displayedPictures) displayed · Audio \(stats.decodedAudio) decoded\n\(tracks)"
+            if player.state == .error {
+                error = stats.readBytes == 0
+                    ? "VLC could not read media bytes. Check the source or network. This does not establish a codec failure."
+                    : "VLC received data but could not continue playback. The stream, container or decoder may have failed; see diagnostics below."
+            }
+        }
+        if decodedFrames == 0, let openedAt, Date().timeIntervalSince(openedAt) > 30 {
+            message = "Still opening video. Check diagnostics or try another source."
+        } else { message = "VLC: \(state)" }
         if !resumeApplied && duration > 0 && player.isSeekable {
             resumeApplied = true
             if let history = library.entry(request.media, episode: request.episode), !history.completed, history.position > 5 {
                 seek(to: min(history.position, duration - 1))
             }
         }
-        if player.state == .error { error = "The player could not decode or read this source. Try another release." }
         if player.state == .ended { ended = true; position = duration; save() }
         ticks += 1
         if ticks % 5 == 0 { save() }
@@ -125,7 +198,7 @@ import VLCKitSPM
     func setSpeed(_ value: Float) { player.rate = value; speed = value }
     func close() {
         guard !closed else { return }
-        closed = true; save(); task?.cancel(); segmentTask?.cancel(); engine?.cancel(); server?.stop()
+        closed = true; save(); task?.cancel(); segmentTask?.cancel(); statusTask?.cancel(); engine?.cancel(); server?.stop()
         player.stop(); player.drawable = nil
         let old = engine; engine = nil
         Task { await old?.stop() }
@@ -133,6 +206,18 @@ import VLCKitSPM
     var audioTracks: [(Int32, String)] {
         zip(player.audioTrackIndexes, player.audioTrackNames).compactMap { index, name in
             guard let index = index as? NSNumber, let name = name as? String else { return nil }; return (index.int32Value, name)
+        }
+    }
+    var playerState: String {
+        switch player.state {
+        case .opening: return "Opening"
+        case .buffering: return "Buffering"
+        case .playing: return "Playing"
+        case .paused: return "Paused"
+        case .ended: return "Ended"
+        case .error: return "Error"
+        case .stopped: return "Stopped"
+        default: return "Inspecting tracks"
         }
     }
     var subtitleTracks: [(Int32, String)] {
@@ -185,11 +270,23 @@ struct PlayerScreen: View {
             Color.black.ignoresSafeArea()
             if model.ready { PlayerSurface(model: model).ignoresSafeArea() }
             if let error = model.error {
-                VStack(spacing: 28) { Text("Playback unavailable").font(.title); Text(error).multilineTextAlignment(.center); Button("Back") { dismiss() } }.padding(80).background(.black.opacity(0.9))
+                VStack(spacing: 28) {
+                    Text("Playback unavailable").font(.title)
+                    Text(error).multilineTextAlignment(.center)
+                    diagnosticDetails
+                    storageAction
+                    Button("Back to sources") { dismiss() }
+                }.padding(80).background(.black.opacity(0.9))
             } else if !model.ready {
                 VStack(spacing: 24) {
                     if model.files.isEmpty { ProgressView() }
                     Text(model.message)
+                    diagnosticDetails
+                    if model.startupTarget > 0 {
+                        ProgressView(value: Double(model.startupBuffered), total: Double(model.startupTarget))
+                        Text("Startup buffer: \(model.startupBuffered / 1024) / \(model.startupTarget / 1024) KB").font(.caption)
+                    }
+                    storageAction
                     if !model.files.isEmpty {
                         ScrollView { VStack(spacing: 20) { ForEach(model.files) { file in Button(file.name) { model.choose(file) } } }.padding(30) }.frame(maxHeight: 500)
                     }
@@ -203,12 +300,15 @@ struct PlayerScreen: View {
             }
             if model.ready && model.error == nil && !tracks && !nextSheet {
                 VStack { Spacer(); HStack { Spacer(); skipButtons }.padding(.bottom, controls || model.ended ? 370 : 65).padding(.trailing, 65) }
+                if model.progress.storageLimited {
+                    VStack { storageAction; Spacer() }.padding(60)
+                }
             }
         }
         .task { model.begin() }
         .onReceive(timer) { _ in
             model.tick()
-            if controls && model.playing && !model.ended && !tracks && !nextSheet && preview == nil && Date().timeIntervalSince(lastInteraction) > 7 {
+            if controls && model.playing && model.decodedFrames > 0 && !model.ended && !tracks && !nextSheet && preview == nil && Date().timeIntervalSince(lastInteraction) > 7 {
                 controls = false
             }
         }
@@ -267,7 +367,10 @@ struct PlayerScreen: View {
             Spacer()
             Text(model.request.media.name).font(.system(size: 44, weight: .bold))
             if let episode = model.request.episode { Text("\(episode.label) · \(episode.title ?? "")").foregroundStyle(.secondary) }
-            if model.duration == 0 { ProgressView("Buffering…") }
+            if model.decodedFrames == 0 || model.player.state == .buffering {
+                Text(model.message).font(.headline)
+                Text(model.progress.summary).font(.caption).foregroundStyle(.secondary)
+            }
             HStack(spacing: 24) {
                 Button { model.toggle(); touch() } label: { Image(systemName: model.playing ? "pause.fill" : "play.fill") }
                     .focused($transportFocus, equals: "play").accessibilityLabel(model.playing ? "Pause" : "Play")
@@ -317,7 +420,7 @@ struct PlayerScreen: View {
         VStack(alignment: .leading, spacing: 30) {
             Text(model.request.media.name).font(.title.bold())
             Picker("Playback settings", selection: $panel) {
-                ForEach(["Info", "Audio", "Subtitles", "Playback"], id: \.self) { Text($0).tag($0) }
+                ForEach(["Info", "Audio", "Subtitles", "Playback", "Diagnostics"], id: \.self) { Text($0).tag($0) }
             }.pickerStyle(.segmented)
             ScrollView {
                 VStack(alignment: .leading, spacing: 24) {
@@ -336,6 +439,11 @@ struct PlayerScreen: View {
                         ForEach(model.subtitleTracks.filter { $0.0 >= 0 }, id: \.0) { track in
                             Button((model.player.currentVideoSubTitleIndex == track.0 ? "✓ " : "") + track.1) { model.player.currentVideoSubTitleIndex = track.0; tracks = false }
                         }
+                    } else if panel == "Diagnostics" {
+                        diagnosticDetails
+                        Text("Storage limit: \(model.cacheLimitGB) GB. Cached torrent data is kept until you close playback.")
+                        storageAction
+                        Text("If the direct test in Settings plays but a torrent does not, the torrent or its delivery path needs investigation. If bytes arrive but frames remain at zero, record the codec and counters shown here.").font(.caption)
                     } else {
                         Text("Playback speed").font(.headline)
                         HStack(spacing: 24) {
@@ -350,6 +458,23 @@ struct PlayerScreen: View {
             Button("Back to video") { tracks = false }
         }.padding(60)
         .onExitCommand { tracks = false }
+    }
+    private var diagnosticDetails: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text(model.progress.cacheLimit > 0 ? model.progress.summary : "Direct source / preparing torrent")
+            Text(model.diagnostics)
+            if let issue = model.transportIssue { Text("Transport: " + issue).foregroundStyle(.orange) }
+        }.font(.system(size: 22, design: .monospaced)).frame(maxWidth: .infinity, alignment: .leading)
+    }
+    @ViewBuilder private var storageAction: some View {
+        if model.progress.storageLimited {
+            VStack(spacing: 18) {
+                Text("Streaming storage limit reached (\(model.cacheLimitGB) GB). Cached data and peer connections have been kept.")
+                if model.cacheLimitGB < 32 {
+                    Button("Increase limit to \(min(32, max(model.cacheLimitGB + 1, model.cacheLimitGB * 2))) GB") { model.increaseStorage() }
+                } else { Text("Close playback and choose a smaller source, or use a direct stream.") }
+            }.padding(25).background(.black.opacity(0.95))
+        }
     }
     private func loadNext() {
         guard let nextEpisode else { return }

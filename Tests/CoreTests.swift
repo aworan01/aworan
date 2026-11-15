@@ -2,6 +2,36 @@ import XCTest
 @testable import WatchlyCore
 
 final class CoreTests: XCTestCase {
+    func testPendingReadEventuallyReturnsBytes() async throws {
+        var attempts = 0
+        let bytes = try await StreamReadLoop.read(timeout: 1, interval: 1_000) {
+            attempts += 1
+            return attempts < 3 ? .pending : .bytes(Data([1, 2, 3]))
+        }
+        XCTAssertEqual(bytes, Data([1, 2, 3]))
+        XCTAssertEqual(attempts, 3)
+    }
+    func testStalledReadTimesOut() async {
+        do {
+            _ = try await StreamReadLoop.read(timeout: 0, interval: 1_000) { .pending }
+            XCTFail("A stalled read must time out")
+        } catch { XCTAssertTrue(error is StreamReadError) }
+    }
+    func testCancelledStorageWaitStopsPromptly() async {
+        let task = Task { try await StreamReadLoop.read(interval: 1_000_000) { .storageLimited } }
+        task.cancel()
+        do { _ = try await task.value; XCTFail("Cancelled wait must not continue") }
+        catch { XCTAssertTrue(error is CancellationError) }
+    }
+    func testStorageWaitCanResumeWithoutAFalseTimeout() async throws {
+        var attempts = 0
+        let bytes = try await StreamReadLoop.read(timeout: 0.1, interval: 1_000) {
+            attempts += 1
+            if attempts == 1 { try await Task.sleep(nanoseconds: 150_000_000); return .storageLimited }
+            return .bytes(Data([4]))
+        }
+        XCTAssertEqual(bytes, Data([4]))
+    }
     func testDiscoverSortsMissingMetadataLastAndPreservesTies() {
         let items = [MediaTitle(id: "1", type: "movie", name: "Zebra"),
                      MediaTitle(id: "2", type: "movie", name: "Alpha", releaseInfo: "2024–", imdbRating: "8.5"),

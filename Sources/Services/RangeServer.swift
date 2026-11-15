@@ -19,6 +19,7 @@ final class RangeServer: @unchecked Sendable {
     private let queue = DispatchQueue(label: "watchly.http")
     private var listener: NWListener?
     private var clients: [UUID: NWConnection] = [:]
+    private var transfers: [ObjectIdentifier: Task<Void, Never>] = [:]
     private var pendingHeaders = Set<ObjectIdentifier>()
     private let token = UUID().uuidString
     var onError: (@Sendable (String) -> Void)?
@@ -50,6 +51,8 @@ final class RangeServer: @unchecked Sendable {
     func stop() {
         queue.async {
             self.listener?.cancel(); self.listener = nil
+            for task in self.transfers.values { task.cancel() }
+            self.transfers.removeAll()
             for client in self.clients.values { client.cancel() }
             self.clients.removeAll()
             self.pendingHeaders.removeAll()
@@ -62,8 +65,8 @@ final class RangeServer: @unchecked Sendable {
         pendingHeaders.insert(ObjectIdentifier(client))
         client.stateUpdateHandler = { [weak self, weak client] state in
             guard let client else { return }
-            if case .cancelled = state { self?.clients[id] = nil; self?.pendingHeaders.remove(ObjectIdentifier(client)) }
-            if case .failed = state { client.cancel(); self?.clients[id] = nil; self?.pendingHeaders.remove(ObjectIdentifier(client)) }
+            if case .cancelled = state { self?.transfers.removeValue(forKey: ObjectIdentifier(client))?.cancel(); self?.clients[id] = nil; self?.pendingHeaders.remove(ObjectIdentifier(client)) }
+            if case .failed = state { client.cancel(); self?.transfers.removeValue(forKey: ObjectIdentifier(client))?.cancel(); self?.clients[id] = nil; self?.pendingHeaders.remove(ObjectIdentifier(client)) }
         }
         client.start(queue: queue)
         receiveHeader(client, accumulated: Data())
@@ -104,23 +107,43 @@ final class RangeServer: @unchecked Sendable {
         let response = "HTTP/1.1 \(status)\r\nAccept-Ranges: bytes\r\nContent-Type: application/octet-stream\r\nContent-Length: \(range.count)\r\n\(contentRange)Connection: close\r\n\r\n"
         client.send(content: Data(response.utf8), completion: .contentProcessed { [weak self] error in
             guard error == nil, method != "HEAD" else { client.cancel(); return }
-            self?.send(client, offset: range.lower, end: range.upper)
+            self?.stream(client, range: range)
         })
     }
-    private func send(_ client: NWConnection, offset: Int64, end: Int64) {
-        guard offset <= end else { client.cancel(); return }
-        if case .cancelled = client.state { return }
-        Task { [weak self] in
+    private func stream(_ client: NWConnection, range: ByteRange) {
+        let key = ObjectIdentifier(client)
+        let requestID = UUID().uuidString
+        transfers[key] = Task { [weak self] in
             guard let self else { return }
             do {
-                let data = try await engine.read(offset: offset, count: Int(min(256 * 1024, end - offset + 1)))
-                guard !data.isEmpty else { throw WatchlyError.message("The video stream ended unexpectedly.") }
-                client.send(content: data, completion: .contentProcessed { [weak self] error in
-                    guard error == nil else { client.cancel(); return }
-                    self?.send(client, offset: offset + Int64(data.count), end: end)
-                })
-            } catch {
-                if case .ready = client.state { onError?(error.localizedDescription) }
+                var offset = range.lower
+                while offset <= range.upper {
+                    try Task.checkCancellation()
+                    let data = try await engine.read(offset: offset, count: Int(min(256 * 1024, range.upper - offset + 1)), requestID: requestID)
+                    try Task.checkCancellation()
+                    try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+                        client.send(content: data, completion: .contentProcessed { error in
+                            if let error { continuation.resume(throwing: error) }
+                            else { continuation.resume() }
+                        })
+                    }
+                    offset += Int64(data.count)
+                }
+            } catch is CancellationError { }
+            catch {
+                // Individual probes may be abandoned by VLC. Report transport evidence,
+                // not a fatal decoder error for the whole playback session.
+                if !Task.isCancelled, case .ready = client.state { onError?(error.localizedDescription) }
+            }
+            await engine.finishRequest(requestID)
+            client.cancel()
+            queue.async { [weak self] in self?.transfers[key] = nil }
+        }
+        // VLC closes abandoned range connections when it probes/seeks elsewhere.
+        // Observe that close while waiting for torrent pieces, not only during send.
+        client.receive(minimumIncompleteLength: 1, maximumLength: 1) { [weak self] _, _, complete, error in
+            if complete || error != nil {
+                self?.transfers.removeValue(forKey: key)?.cancel()
                 client.cancel()
             }
         }

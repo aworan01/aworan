@@ -50,8 +50,32 @@ final class TorrentEngine: @unchecked Sendable {
         }
     }
     func select(_ file: TorrentFile) async throws { try await work { try self.bridge.selectFile(file.id) } }
-    func read(offset: Int64, count: Int) async throws -> Data {
-        try await work { try self.bridge.read(offset: offset, count: count) }
+    func progress() async throws -> TorrentProgress {
+        try await work {
+            let value = try self.bridge.snapshot()
+            return TorrentProgress(peers: (value["peers"] as? NSNumber)?.intValue ?? 0,
+                speed: (value["speed"] as? NSNumber)?.int64Value ?? 0,
+                downloaded: (value["downloaded"] as? NSNumber)?.int64Value ?? 0,
+                delivered: (value["delivered"] as? NSNumber)?.int64Value ?? 0,
+                storageLimited: (value["storageLimited"] as? NSNumber)?.boolValue ?? false,
+                cacheLimit: (value["cacheLimit"] as? NSNumber)?.int64Value ?? 0)
+        }
+    }
+    func read(offset: Int64, count: Int, requestID: String) async throws -> Data {
+        try await StreamReadLoop.read {
+            do {
+                let data = try await self.work { try self.bridge.read(offset: offset, count: count, requestID: requestID) }
+                return data.isEmpty ? .pending : .bytes(data)
+            } catch let error as NSError where error.domain == "WatchlyTorrent" && error.code == 2 {
+                return .storageLimited
+            }
+        }
+    }
+    func finishRequest(_ id: String) async {
+        _ = try? await work { self.bridge.finishRequest(id) }
+    }
+    func setCacheLimit(gigabytes: Int) async {
+        _ = try? await work { self.bridge.setCacheLimit(Int64(gigabytes) * 1024 * 1024 * 1024) }
     }
     func cancel() { bridge.cancel() }
     func stop() async {
