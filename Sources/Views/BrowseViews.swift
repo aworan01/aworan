@@ -66,24 +66,30 @@ struct WatchlyHome: View {
 
 struct TitleCard: View {
     var title: MediaTitle
+    var onFocus: ((MediaTitle) -> Void)? = nil
+    @FocusState private var isFocused: Bool
     var body: some View {
         NavigationLink { DetailView(initial: title) } label: {
             VStack(alignment: .leading, spacing: 10) {
                 Artwork(url: title.poster).frame(width: 190, height: 280).clipShape(RoundedRectangle(cornerRadius: 12))
+                    .overlay(RoundedRectangle(cornerRadius: 12).stroke(isFocused ? Color.white : Color.clear, lineWidth: 3))
                 Text(title.name).font(.headline).lineLimit(1).frame(width: 190, alignment: .leading)
                 Text(title.releaseInfo ?? "").font(.caption).foregroundStyle(.secondary)
             }.padding(8)
         }.buttonStyle(.card)
+        .focused($isFocused)
+        .onChange(of: isFocused) { focused in if focused { onFocus?(title) } }
     }
 }
 
 struct Shelf: View {
     var name: String
     var titles: [MediaTitle]
+    var onFocus: ((MediaTitle) -> Void)? = nil
     var body: some View {
         VStack(alignment: .leading, spacing: 20) {
             Text(name).font(.title2.bold()).padding(.horizontal, 60)
-            ScrollView(.horizontal) { LazyHStack(spacing: 26) { ForEach(titles) { TitleCard(title: $0) } }.padding(.horizontal, 60).padding(.vertical, 20) }
+            ScrollView(.horizontal) { LazyHStack(spacing: 26) { ForEach(titles) { TitleCard(title: $0, onFocus: onFocus) } }.padding(.horizontal, 60).padding(.vertical, 20) }
         }
     }
 }
@@ -96,11 +102,12 @@ struct BrowseView: View {
     @State private var error: String?
     @State private var loading = false
     @State private var genre = "All"
+    @State private var focusedTitle: MediaTitle?
     private let genres = ["All", "Action", "Adventure", "Animation", "Comedy", "Crime", "Documentary", "Drama", "Family", "Fantasy", "Horror", "Mystery", "Romance", "Sci-Fi", "Thriller"]
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 30) {
-                if let featured = (type == "series" ? series : movies).first { FeaturedTitle(title: featured) }
+                if let featured = focusedTitle ?? (type == "series" ? series : movies).first { FeaturedTitle(title: featured) }
                 HStack {
                     Text("WATCHLY").font(.system(size: 38, weight: .black)).foregroundStyle(.red)
                     Spacer()
@@ -127,14 +134,14 @@ struct BrowseView: View {
                         }
                     }
                 }
-                if !movies.isEmpty { Shelf(name: "Popular movies", titles: movies) }
-                if !series.isEmpty { Shelf(name: "Popular series", titles: series) }
+                if !movies.isEmpty { Shelf(name: "Popular movies", titles: movies, onFocus: { focusedTitle = $0 }) }
+                if !series.isEmpty { Shelf(name: "Popular series", titles: series, onFocus: { focusedTitle = $0 }) }
             }.padding(.vertical, 35)
         }
         .task(id: genre) { await load() }
     }
     private func load() async {
-        loading = true; error = nil
+        loading = true; error = nil; focusedTitle = nil
         defer { loading = false }
         do {
             let filter = genre == "All" ? nil : genre

@@ -212,7 +212,10 @@ struct PlayerScreen: View {
             }
         }
         .onPlayPauseCommand { model.toggle(); reveal() }
-        .onChange(of: transportFocus) { _ in touch() }
+        .onChange(of: transportFocus) { focus in
+            if focus != "timeline" { preview = nil }
+            touch()
+        }
         .onMoveCommand { direction in
             touch()
             if !controls {

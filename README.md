@@ -10,7 +10,19 @@ Native tvOS port of the supplied Watchly Android TV project. Target: Apple TV 4K
 - Direct HTTP(S) playback, magnet links and remote `.torrent` files.
 - On-device BitTorrent, DHT/tracker discovery, verified-piece reads, video file selection and seeking through a loopback-only HTTP range server.
 - Streaming storage limit, with deletion/restart at the current read location when the limit is reached. Brief buffering is expected on rollover.
-- Siri Remote playback controls, audio/subtitle track selection, IntroDB skip-intro data and next-episode source selection.
+- Horizontal top tabs, backdrop-led browsing and a dedicated Discover poster grid. Discover supports movie/series and genre selection, genre browsing, reset, and catalogue/title/year/rating ordering. Choices are stored per profile. Sorting applies to fetched Cinemeta results, not the entire global catalogue; unknown year/rating values sort last.
+- Compact Siri Remote transport with elapsed/remaining time, preview-and-confirm seeking, seven-second auto-hide during playback, and Info/Audio/Subtitles/Playback panels. Playback speeds range from 0.5× to 2×; next-episode source selection remains available.
+- IntroDB intro/outro buttons for movies and episodes where valid timing data exists. Timing lookup does not block playback. Reported post-credit scenes are preserved; missing, invalid, out-of-duration or explicitly absent markers produce no skip button. Community timings may differ between releases.
+
+### Playback remote guide
+
+- Play/Pause toggles playback and reveals controls. Select on the video reveals controls.
+- Focus the timeline, use Left/Right for a ten-second preview, then Select to commit. Back cancels a pending preview.
+- With controls hidden, Left/Right seeks ten seconds and reveals controls; Up opens playback settings.
+- Back closes playback settings, then hides transport controls; Back with controls hidden exits the player.
+- Skip buttons appear during the reported intro/credits window, including while the transport is hidden. Skipping is manual, never automatic.
+
+The NuvioTV reference informed these interface changes. The implementation is written for Watchly's existing SwiftUI/VLCKit architecture; it does not import Nuvio's GPL source, assets, Kotlin shared core, mpv or TMDB services. Full TMDB filters and global sorting are not included.
 - macOS build scripts and GitHub Actions workflow producing an **unsigned tvOS device IPA** for a sideloading tool.
 
 ## Important differences from Android
