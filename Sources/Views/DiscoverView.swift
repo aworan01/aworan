@@ -19,22 +19,22 @@ struct DiscoverView: View {
                     Text("Cinemeta · Popular").foregroundStyle(.secondary)
                 }
                 HStack(spacing: 20) {
-                    Menu {
+                    DiscoverFilter(title: selection.type == "movie" ? "Movies" : "Series", symbol: "film.stack") {
                         Picker("Type", selection: $library.discover.type) {
                             Text("Movies").tag("movie")
                             Text("Series").tag("series")
                         }
-                    } label: { Label(selection.type == "movie" ? "Movies" : "Series", systemImage: "film.stack") }
-                    Menu {
+                    }
+                    DiscoverFilter(title: selection.genre, symbol: "line.3.horizontal.decrease") {
                         Picker("Genre", selection: $library.discover.genre) {
                             ForEach(DiscoverSelection.genres, id: \.self) { Text($0).tag($0) }
                         }
-                    } label: { Label(selection.genre, systemImage: "line.3.horizontal.decrease") }
-                    Menu {
+                    }
+                    DiscoverFilter(title: selection.sort.rawValue, symbol: "arrow.up.arrow.down") {
                         Picker("Sort loaded titles", selection: $library.discover.sort) {
                             ForEach(DiscoverSort.allCases, id: \.self) { Text($0.rawValue).tag($0) }
                         }
-                    } label: { Label(selection.sort.rawValue, systemImage: "arrow.up.arrow.down") }
+                    }
                     Button("Browse genres") { browsing = true }
                     Button("Reset") { library.discover = DiscoverSelection() }
                 }.font(.system(size: 22)).focusSection()
@@ -81,6 +81,19 @@ struct DiscoverView: View {
         } catch {
             guard !Task.isCancelled, key == requestKey else { return }
             self.error = error.localizedDescription; loading = false
+        }
+    }
+}
+
+private struct DiscoverFilter<Content: View>: View {
+    let title: String
+    let symbol: String
+    @ViewBuilder var content: () -> Content
+    var body: some View {
+        if #available(tvOS 17.0, *) {
+            Menu { content() } label: { Label(title, systemImage: symbol) }
+        } else {
+            content().frame(maxWidth: 330)
         }
     }
 }
