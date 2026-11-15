@@ -15,13 +15,13 @@ The first GitHub Actions run (43664801270) failed before any build steps started
 
 After the user authorized public visibility, the macOS build ran successfully:
 
-- Run: https://github.com/aworan01/aworan/actions/runs/43667091979
-- Source commit: `3d23bef`
+- Final run: https://github.com/aworan01/aworan/actions/runs/43667478139
+- Source commit: `d410fb3`
 - Four Swift core tests and three packaging tests passed.
 - OpenSSL, libtorrent and the Objective-C++ bridge compiled for ARM64 tvOS.
 - The full SwiftUI app compiled and linked successfully with VLCKit.
 - An unsigned IPA was generated and downloaded; ZIP integrity, ARM64 executable, physical AppleTVOS platform, device family 3 and tvOS 16.0 deployment target were verified.
-- Inspection found the generated bundle version defaulted to 1.0; a follow-up build makes the bundle use the configured 0.1.0 preview version explicitly.
+- Final bundle version: **0.1.0**, build **1**. The follow-up build explicitly uses the configured preview version rather than XcodeGen's default.
 
 No physical Apple TV installation or playback test has been performed.
 
