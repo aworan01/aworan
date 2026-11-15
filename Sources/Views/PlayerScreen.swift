@@ -23,6 +23,7 @@ import VLCKitSPM
     @Published var decodedFrames = 0
     private var statusTask: Task<Void, Never>?
     private var openedAt: Date?
+    private var torrentOpened = false
     let request: PlaybackRequest
     private let library: LibraryStore
     private var engine: TorrentEngine?
@@ -40,7 +41,7 @@ import VLCKitSPM
         guard task == nil else { return }
         statusTask = Task {
             while !Task.isCancelled && !closed {
-                if let engine {
+                if let engine, torrentOpened {
                     do { progress = try await engine.progress() }
                     catch { if !closed { transportIssue = error.localizedDescription } }
                 }
@@ -66,6 +67,7 @@ import VLCKitSPM
                 let engine = try TorrentEngine(cacheGB: library.cacheGB)
                 self.engine = engine
                 try await engine.open(location)
+                torrentOpened = true
                 let deadline = Date().addingTimeInterval(90)
                 while Date() < deadline {
                     try Task.checkCancellation()
@@ -103,7 +105,10 @@ import VLCKitSPM
         try await warm(engine, offset: 0, count: head)
         if tail > 0 {
             message = "Reading video index…"
-            try await warm(engine, offset: file.size - tail, count: tail)
+            do { try await warm(engine, offset: file.size - tail, count: tail, timeout: 8) }
+            catch is StreamReadError {
+                transportIssue = "End-of-file index is not buffered yet. VLC will request it if needed."
+            }
         }
         message = "Opening buffered video…"
         let server = RangeServer(engine: engine, file: file)
@@ -113,13 +118,13 @@ import VLCKitSPM
         try Task.checkCancellation()
         play(url)
     }
-    private func warm(_ engine: TorrentEngine, offset: Int64, count: Int64) async throws {
+    private func warm(_ engine: TorrentEngine, offset: Int64, count: Int64, timeout: TimeInterval = 45) async throws {
         let id = UUID().uuidString
         do {
             var read: Int64 = 0
             while read < count {
                 try Task.checkCancellation()
-                let data = try await engine.read(offset: offset + read, count: Int(min(256 * 1024, count - read)), requestID: id)
+                let data = try await engine.read(offset: offset + read, count: Int(min(256 * 1024, count - read)), requestID: id, timeout: timeout)
                 read += Int64(data.count); startupBuffered += Int64(data.count)
             }
             await engine.finishRequest(id)
@@ -132,7 +137,7 @@ import VLCKitSPM
         Task {
             await engine.setCacheLimit(gigabytes: next)
             if player.state == .error {
-                error = nil; transportIssue = nil; openedAt = Date()
+                error = nil; transportIssue = nil; openedAt = Date(); resumeApplied = false
                 player.stop(); player.play()
             }
         }

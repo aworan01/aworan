@@ -61,8 +61,8 @@ final class TorrentEngine: @unchecked Sendable {
                 cacheLimit: (value["cacheLimit"] as? NSNumber)?.int64Value ?? 0)
         }
     }
-    func read(offset: Int64, count: Int, requestID: String) async throws -> Data {
-        try await StreamReadLoop.read {
+    func read(offset: Int64, count: Int, requestID: String, timeout: TimeInterval = 45) async throws -> Data {
+        try await StreamReadLoop.read(timeout: timeout) {
             do {
                 let data = try await self.work { try self.bridge.read(offset: offset, count: count, requestID: requestID) }
                 return data.isEmpty ? .pending : .bytes(data)

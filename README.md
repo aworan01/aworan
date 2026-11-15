@@ -9,7 +9,7 @@ Native tvOS port of the supplied Watchly Android TV project. Target: Apple TV 4K
 - Stremio-compatible source selection (Torrentio is the initial configurable provider), with file indices retained for season packs.
 - Direct HTTP(S) playback, magnet links and remote `.torrent` files.
 - On-device BitTorrent, DHT/tracker discovery, verified-piece reads, video file selection and seeking through a loopback-only HTTP range server.
-- Streaming storage limit, with deletion/restart at the current read location when the limit is reached. Brief buffering is expected on rollover.
+- Streaming storage limit with an in-player increase action. Reaching the limit waits for more allowance rather than deleting data and recreating the torrent session. Choices extend to 32 GB, subject to free device storage; the app stops new reads if less than 256 MB is free. Close playback to clean up its cache. This is retained session storage, not a rolling eviction cache.
 - Horizontal top tabs, backdrop-led browsing and a dedicated Discover poster grid. Discover supports movie/series and genre selection, genre browsing, reset, and catalogue/title/year/rating ordering. Choices are stored per profile. Sorting applies to fetched Cinemeta results, not the entire global catalogue; unknown year/rating values sort last.
 - Compact Siri Remote transport with elapsed/remaining time, preview-and-confirm seeking, seven-second auto-hide during playback, and Info/Audio/Subtitles/Playback panels. Playback speeds range from 0.5× to 2×; next-episode source selection remains available.
 - IntroDB intro/outro buttons for movies and episodes where valid timing data exists. Timing lookup does not block playback. Reported post-credit scenes are preserved; missing, invalid, out-of-duration or explicitly absent markers produce no skip button. Community timings may differ between releases.
@@ -23,6 +23,14 @@ Native tvOS port of the supplied Watchly Android TV project. Target: Apple TV 4K
 - Skip buttons appear during the reported intro/credits window, including while the transport is hidden. Skipping is manual, never automatic.
 
 The NuvioTV reference informed these interface changes. The implementation is written for Watchly's existing SwiftUI/VLCKit architecture; it does not import Nuvio's GPL source, assets, Kotlin shared core, mpv or TMDB services. Full TMDB filters and global sorting are not included.
+
+### Playback diagnostics (0.2.1)
+
+Torrent reads now poll without waiting for pieces under the native bridge lock. Each HTTP transfer owns a cancellable task and request identifier; active read windows are scheduled together. Startup reads the first 4 MiB and attempts a 512 KiB tail/index warmup (an unavailable tail is allowed to fall back to VLC's own requests). Direct HTTP(S) provider URLs take precedence over a hash when both are supplied.
+
+Startup shows stages, peers, download rate and buffer progress. The player's Diagnostics panel shows VLC state, input-byte counters, codec FourCCs and decoded/displayed video/audio counters. Individual HTTP probe failures are transport warnings, not automatically fatal decoder errors. The decoder is still VLCKit; it has not been replaced or claimed to support every HDR/codec variant.
+
+Settings → Play Apple test stream opens Apple's [Bip Bop HLS sample](https://developer.apple.com/streaming/examples/advanced-stream-hevc.html) without using torrents. Compare that with a failing source, then inspect Diagnostics. A successful HLS test is only a control test; comparing the same video file via direct HTTP and torrent remains the stronger way to isolate transport from codec issues. No on-device playback success is implied by a successful build.
 - macOS build scripts and GitHub Actions workflow producing an **unsigned tvOS device IPA** for a sideloading tool.
 
 ## Important differences from Android

@@ -2,6 +2,10 @@ import XCTest
 @testable import WatchlyCore
 
 final class CoreTests: XCTestCase {
+    func testDirectProviderURLIsPreferredOverTorrentHash() {
+        let source = StreamSource(infoHash: String(repeating: "a", count: 40), url: "https://example.com/video.mp4")
+        XCTAssertEqual(source.location, "https://example.com/video.mp4")
+    }
     func testPendingReadEventuallyReturnsBytes() async throws {
         var attempts = 0
         let bytes = try await StreamReadLoop.read(timeout: 1, interval: 1_000) {

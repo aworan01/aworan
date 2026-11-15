@@ -63,7 +63,10 @@ struct StreamSource: Codable, Hashable, Identifiable {
         components.queryItems! += ["udp://tracker.opentrackr.org:1337/announce", "udp://tracker.torrent.eu.org:451/announce"].map { URLQueryItem(name: "tr", value: $0) }
         return components.string
     }
-    var location: String? { magnet ?? url }
+    var location: String? {
+        if let url, let scheme = URL(string: url)?.scheme?.lowercased(), ["http", "https"].contains(scheme) { return url }
+        return magnet ?? url
+    }
 }
 
 struct Profile: Codable, Identifiable, Equatable {
