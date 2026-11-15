@@ -1,0 +1,62 @@
+name: Build Watchly for Apple TV
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    tags: ['tvos-v*']
+  pull_request:
+permissions:
+  contents: read
+concurrency:
+  group: tvos-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install build tools
+        run: brew install cmake ninja xcodegen
+      - name: Show toolchain
+        run: |
+          xcodebuild -version
+          xcrun --sdk appletvos --show-sdk-version
+      - name: Test core logic
+        run: swift test
+      - name: Test IPA packaging
+        run: python3 -m unittest discover -s scripts/tests -v
+      - name: Build native libraries and IPA
+        run: bash scripts/build-ipa.sh
+      - name: Upload unsigned IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: Watchly-tvOS-unsigned
+          path: build/Watchly-tvOS-unsigned.ipa
+          if-no-files-found: error
+      - name: Upload build log bundle
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-diagnostics
+          path: |
+            build/DerivedData/Logs
+            build/native-appletvos/bridge/CMakeFiles/CMakeConfigureLog.yaml
+  release:
+    if: startsWith(github.ref, 'refs/tags/tvos-v')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: Watchly-tvOS-unsigned
+          path: dist
+      - name: Publish prerelease for atvloadly
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" dist/*.ipa --prerelease \
+            --title "Watchly Apple TV $GITHUB_REF_NAME" --notes-file RELEASE-NOTES.md
