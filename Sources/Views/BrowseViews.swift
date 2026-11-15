@@ -169,7 +169,7 @@ struct SearchView: View {
                 try Task.checkCancellation()
                 movies = results.0; series = results.1; loading = false
             } catch is CancellationError { }
-            catch { if !Task.isCancelled { error = error.localizedDescription; loading = false } }
+            catch { if !Task.isCancelled { self.error = error.localizedDescription; loading = false } }
         }
     }
 }

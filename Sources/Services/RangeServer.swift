@@ -1,6 +1,17 @@
 import Foundation
 import Network
 
+private final class StartGate: @unchecked Sendable {
+    private let lock = NSLock()
+    private var waiting = true
+    func claim() -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        guard waiting else { return false }
+        waiting = false
+        return true
+    }
+}
+
 /// Loopback only; an unguessable per-session path prevents accidental access.
 final class RangeServer: @unchecked Sendable {
     private let engine: TorrentEngine
@@ -19,17 +30,16 @@ final class RangeServer: @unchecked Sendable {
         let listener = try NWListener(using: params)
         self.listener = listener
         return try await withCheckedThrowingContinuation { continuation in
-            var waiting = true // Accessed only on queue.
-            listener.stateUpdateHandler = { [weak self] state in
-                guard waiting else { return }
+            let gate = StartGate()
+            listener.stateUpdateHandler = { [weak self, weak listener] state in
                 switch state {
                 case .ready:
-                    waiting = false
-                    if let port = listener.port, let self {
+                    guard gate.claim() else { return }
+                    if let port = listener?.port, let self {
                         continuation.resume(returning: URL(string: "http://127.0.0.1:\(port.rawValue)/\(self.token)/video")!)
                     } else { continuation.resume(throwing: WatchlyError.message("Could not start video streaming.")) }
-                case .failed(let error): waiting = false; continuation.resume(throwing: error)
-                case .cancelled: waiting = false; continuation.resume(throwing: CancellationError())
+                case .failed(let error): if gate.claim() { continuation.resume(throwing: error) }
+                case .cancelled: if gate.claim() { continuation.resume(throwing: CancellationError()) }
                 default: break
                 }
             }
@@ -50,7 +60,8 @@ final class RangeServer: @unchecked Sendable {
         let id = UUID()
         clients[id] = client
         pendingHeaders.insert(ObjectIdentifier(client))
-        client.stateUpdateHandler = { [weak self] state in
+        client.stateUpdateHandler = { [weak self, weak client] state in
+            guard let client else { return }
             if case .cancelled = state { self?.clients[id] = nil; self?.pendingHeaders.remove(ObjectIdentifier(client)) }
             if case .failed = state { client.cancel(); self?.clients[id] = nil; self?.pendingHeaders.remove(ObjectIdentifier(client)) }
         }
