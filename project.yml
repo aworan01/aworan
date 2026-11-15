@@ -22,8 +22,8 @@ targets:
     sources:
       - Sources
       - Native/TorrentBridge.h
-    resources:
-      - Resources
+      - path: Resources
+        buildPhase: resources
     info:
       path: build/Info.plist
       properties:

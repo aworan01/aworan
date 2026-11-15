@@ -8,6 +8,7 @@ final class RangeServer: @unchecked Sendable {
     private let queue = DispatchQueue(label: "watchly.http")
     private var listener: NWListener?
     private var clients: [UUID: NWConnection] = [:]
+    private var pendingHeaders = Set<ObjectIdentifier>()
     private let token = UUID().uuidString
     var onError: (@Sendable (String) -> Void)?
     init(engine: TorrentEngine, file: TorrentFile) { self.engine = engine; self.file = file }
@@ -41,21 +42,22 @@ final class RangeServer: @unchecked Sendable {
             self.listener?.cancel(); self.listener = nil
             for client in self.clients.values { client.cancel() }
             self.clients.removeAll()
+            self.pendingHeaders.removeAll()
         }
     }
     private func accept(_ client: NWConnection) {
         guard clients.count < 8 else { client.cancel(); return }
         let id = UUID()
         clients[id] = client
+        pendingHeaders.insert(ObjectIdentifier(client))
         client.stateUpdateHandler = { [weak self] state in
-            if case .cancelled = state { self?.clients[id] = nil }
-            if case .failed = state { client.cancel(); self?.clients[id] = nil }
+            if case .cancelled = state { self?.clients[id] = nil; self?.pendingHeaders.remove(ObjectIdentifier(client)) }
+            if case .failed = state { client.cancel(); self?.clients[id] = nil; self?.pendingHeaders.remove(ObjectIdentifier(client)) }
         }
         client.start(queue: queue)
         receiveHeader(client, accumulated: Data())
-        queue.asyncAfter(deadline: .now() + 10) { [weak client] in
-            // Header timeout is handled by the byte limit and this idle guard.
-            if let client, case .preparing = client.state { client.cancel() }
+        queue.asyncAfter(deadline: .now() + 10) { [weak self, weak client] in
+            if let client, self?.pendingHeaders.contains(ObjectIdentifier(client)) == true { client.cancel() }
         }
     }
     private func receiveHeader(_ client: NWConnection, accumulated: Data) {
@@ -74,6 +76,7 @@ final class RangeServer: @unchecked Sendable {
         client.send(content: Data(response.utf8), completion: .contentProcessed { _ in client.cancel() })
     }
     private func handle(_ client: NWConnection, header: String) {
+        pendingHeaders.remove(ObjectIdentifier(client))
         let lines = header.components(separatedBy: "\r\n")
         let request = (lines.first ?? "").split(separator: " ")
         guard request.count == 3, request[1] == "/\(token)/video" else { reply(client, status: "404 Not Found"); return }

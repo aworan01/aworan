@@ -11,7 +11,9 @@ Prepared for Apple TV 4K (2022), tvOS 16+.
 
 ## Build and device checks
 
-The Swift tests, Objective-C++/Swift compilation, dependency linking and IPA generation require the macOS workflow. Their result will be recorded here after the run; they have not yet been verified locally.
+The first GitHub Actions run (43664801270) failed before any build steps started. GitHub reported failed account payments or a spending-limit restriction. This is an account/runner startup failure, not a compiler result.
+
+The Swift tests, Objective-C++/Swift compilation, dependency linking and IPA generation remain unverified until a macOS runner starts successfully.
 
 No physical Apple TV installation or playback test has been performed.
 
