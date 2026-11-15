@@ -7,6 +7,7 @@ import CryptoKit
     @Published var activeID: String?
     @Published private(set) var saved: [MediaTitle] = []
     @Published private(set) var history: [HistoryEntry] = []
+    @Published var discover = DiscoverSelection() { didSet { if activeID != nil { write(discover, key: profileKey + ".discover") } } }
     @Published var sourceProvider: String { didSet { defaults.set(sourceProvider, forKey: "sourceProvider") } }
     @Published var cacheGB: Int { didSet { defaults.set(cacheGB, forKey: "cacheGB") } }
     private let defaults = UserDefaults.standard
@@ -29,6 +30,7 @@ import CryptoKit
         activeID = profile.id
         saved = read(profileKey + ".saved", fallback: [])
         history = read(profileKey + ".history", fallback: [])
+        discover = read(profileKey + ".discover", fallback: DiscoverSelection())
         return true
     }
     func addProfile(name: String) {

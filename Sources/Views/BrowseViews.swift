@@ -55,10 +55,12 @@ struct WatchlyHome: View {
             NavigationStack { BrowseView(type: nil) }.tabItem { Label("Home", systemImage: "house.fill") }
             NavigationStack { BrowseView(type: "movie") }.tabItem { Label("Movies", systemImage: "film") }
             NavigationStack { BrowseView(type: "series") }.tabItem { Label("Series", systemImage: "tv") }
+            NavigationStack { DiscoverView() }.tabItem { Label("Discover", systemImage: "safari") }
             NavigationStack { SearchView() }.tabItem { Label("Search", systemImage: "magnifyingglass") }
             NavigationStack { LibraryView() }.tabItem { Label("My List", systemImage: "bookmark.fill") }
             NavigationStack { SettingsView() }.tabItem { Label("Settings", systemImage: "gearshape") }
         }
+        .tint(.red)
     }
 }
 
@@ -98,6 +100,7 @@ struct BrowseView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 30) {
+                if let featured = (type == "series" ? series : movies).first { FeaturedTitle(title: featured) }
                 HStack {
                     Text("WATCHLY").font(.system(size: 38, weight: .black)).foregroundStyle(.red)
                     Spacer()

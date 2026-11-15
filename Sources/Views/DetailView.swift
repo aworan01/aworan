@@ -24,11 +24,12 @@ struct DetailView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 28) {
                 ZStack(alignment: .bottomLeading) {
-                    Artwork(url: media.background ?? media.poster).frame(height: 420).clipped()
+                    Artwork(url: media.background ?? media.poster).frame(height: 500).clipped()
                     LinearGradient(colors: [.clear, .black], startPoint: .top, endPoint: .bottom)
                     VStack(alignment: .leading, spacing: 15) {
                         Text(media.name).font(.system(size: 52, weight: .bold))
                         Text(media.facts).foregroundStyle(.secondary)
+                        Text((media.genres ?? []).joined(separator: " · ")).font(.headline)
                     }.padding(50)
                 }
                 VStack(alignment: .leading, spacing: 25) {

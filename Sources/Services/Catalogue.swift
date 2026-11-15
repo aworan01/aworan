@@ -56,20 +56,13 @@ actor Catalogue {
         var seen = Set<String>()
         return found.filter { seen.insert($0.id).inserted }
     }
-    struct Intro: Decodable {
-        var start_sec: Double?
-        var end_sec: Double?
-        var start_ms: Double?
-        var end_ms: Double?
-        var start: Double { start_sec ?? (start_ms ?? 0) / 1000 }
-        var end: Double { end_sec ?? (end_ms ?? 0) / 1000 }
-    }
-    struct Segments: Decodable { var intro: Intro? }
-    func intro(_ media: MediaTitle, episode: Episode) async -> Intro? {
+    func segments(_ media: MediaTitle, episode: Episode?) async -> SkipSegments? {
         guard media.id.hasPrefix("tt") else { return nil }
-        let url = URL(string: "https://api.introdb.app/segments?imdb_id=\(encoded(media.id))&season=\(episode.season)&episode=\(episode.episode)")!
-        guard let value = try? await fetch(url, as: Segments.self, cacheFor: 86400).intro,
-              value.start.isFinite, value.end.isFinite, value.start >= 0, value.end > value.start else { return nil }
-        return value
+        let query: String
+        if let episode { query = "&season=\(episode.season)&episode=\(episode.episode)" }
+        else if !media.isSeries { query = "&is_movie=true" }
+        else { return nil }
+        let url = URL(string: "https://api.introdb.app/segments?imdb_id=\(encoded(media.id))\(query)")!
+        return try? await fetch(url, as: SkipSegments.self, cacheFor: 86400)
     }
 }

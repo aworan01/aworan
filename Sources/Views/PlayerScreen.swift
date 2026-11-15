@@ -12,12 +12,14 @@ import VLCKitSPM
     @Published var duration = 0.0
     @Published var playing = false
     @Published var ended = false
-    @Published var intro: Catalogue.Intro?
+    @Published var segments: SkipSegments?
+    @Published var speed: Float = 1
     let request: PlaybackRequest
     private let library: LibraryStore
     private var engine: TorrentEngine?
     private var server: RangeServer?
     private var task: Task<Void, Never>?
+    private var segmentTask: Task<Void, Never>?
     private var resumeApplied = false
     private var ticks = 0
     private var closed = false
@@ -27,10 +29,13 @@ import VLCKitSPM
     }
     func begin() {
         guard task == nil else { return }
+        segmentTask = Task {
+            let result = await Catalogue.shared.segments(request.media, episode: request.episode)
+            if !Task.isCancelled && !closed { segments = result }
+        }
         task = Task {
             do {
                 guard let location = request.source.location else { throw WatchlyError.message("This source has no playable location.") }
-                if let episode = request.episode { intro = await Catalogue.shared.intro(request.media, episode: episode) }
                 try Task.checkCancellation()
                 let torrent = location.lowercased().hasPrefix("magnet:") || URL(string: location)?.pathExtension.lowercased() == "torrent"
                 if !torrent {
@@ -115,10 +120,12 @@ import VLCKitSPM
         guard duration > 0, player.isSeekable else { return }
         let clamped = max(0, min(seconds, duration - 0.5))
         player.position = Float(clamped / duration)
+        position = clamped; ended = false
     }
+    func setSpeed(_ value: Float) { player.rate = value; speed = value }
     func close() {
         guard !closed else { return }
-        closed = true; save(); task?.cancel(); engine?.cancel(); server?.stop()
+        closed = true; save(); task?.cancel(); segmentTask?.cancel(); engine?.cancel(); server?.stop()
         player.stop(); player.drawable = nil
         let old = engine; engine = nil
         Task { await old?.stop() }
@@ -152,6 +159,10 @@ struct PlayerScreen: View {
     @StateObject private var model: PlaybackModel
     @State private var controls = true
     @State private var tracks = false
+    @State private var panel = "Info"
+    @State private var preview: Double?
+    @State private var lastInteraction = Date()
+    @FocusState private var transportFocus: String?
     @State private var nextSources: [StreamSource] = []
     @State private var nextError: String?
     @State private var loadingNext = false
@@ -184,58 +195,42 @@ struct PlayerScreen: View {
                     Button("Cancel") { dismiss() }
                 }.padding(60)
             } else if controls || model.ended {
-                VStack(alignment: .leading, spacing: 25) {
-                    Text(model.request.media.name).font(.title.bold())
-                    if let episode = model.request.episode { Text("\(episode.label) · \(episode.title ?? "")") }
-                    Spacer()
-                    if model.duration == 0 { ProgressView("Buffering…") }
-                    HStack {
-                        Text(time(model.position)); ProgressView(value: min(1, model.position / max(1, model.duration))); Text(time(model.duration))
-                    }
-                    HStack(spacing: 22) {
-                        Button { model.seek(to: model.position - 30) } label: { Image(systemName: "gobackward.30") }
-                        Button { model.toggle() } label: { Image(systemName: model.playing ? "pause.fill" : "play.fill") }
-                        Button { model.seek(to: model.position + 30) } label: { Image(systemName: "goforward.30") }
-                        Button("Audio & subtitles") { tracks = true }
-                        Button("Hide controls") { controls = false }
-                        Button("Close") { dismiss() }
-                    }
-                    HStack {
-                        if let intro = model.intro, model.position >= intro.start - 2, model.position < intro.end { Button("Skip intro") { model.seek(to: intro.end) } }
-                        if nextEpisode != nil { Button("Next episode") { loadNext() } }
-                    }
-                }.padding(60).background(LinearGradient(colors: [.black.opacity(0.8), .clear, .black.opacity(0.9)], startPoint: .top, endPoint: .bottom))
+                transport
             } else {
                 // A focusable transparent surface keeps Select/remote events usable.
-                Color.clear.focusable().onTapGesture { controls = true }
+                Color.clear.focusable().onTapGesture { reveal() }
+            }
+            if model.ready && model.error == nil && !tracks && !nextSheet {
+                VStack { Spacer(); HStack { Spacer(); skipButtons }.padding(.bottom, controls || model.ended ? 370 : 65).padding(.trailing, 65) }
             }
         }
         .task { model.begin() }
-        .onReceive(timer) { _ in model.tick() }
-        .onPlayPauseCommand { model.toggle() }
+        .onReceive(timer) { _ in
+            model.tick()
+            if controls && model.playing && !model.ended && !tracks && !nextSheet && preview == nil && Date().timeIntervalSince(lastInteraction) > 7 {
+                controls = false
+            }
+        }
+        .onPlayPauseCommand { model.toggle(); reveal() }
+        .onChange(of: transportFocus) { _ in touch() }
         .onMoveCommand { direction in
+            touch()
             if !controls {
                 if direction == .left { model.seek(to: model.position - 10) }
                 else if direction == .right { model.seek(to: model.position + 10) }
-                else { controls = true }
+                else if direction == .up { tracks = true }
+                reveal()
             }
         }
-        .onExitCommand { if !controls && model.ready { controls = true } else { dismiss() } }
+        .onExitCommand {
+            if preview != nil { preview = nil; touch() }
+            else if tracks { tracks = false; reveal() }
+            else if controls && model.ready && !model.ended { controls = false }
+            else { dismiss() }
+        }
         .onChange(of: scenePhase) { phase in if phase != .active { model.pause() } }
         .onDisappear { model.close() }
-        .sheet(isPresented: $tracks) {
-            HStack(alignment: .top, spacing: 70) {
-                VStack(spacing: 24) {
-                    Text("Audio").font(.title)
-                    ForEach(model.audioTracks, id: \.0) { track in Button(track.1) { model.player.currentAudioTrackIndex = track.0; tracks = false } }
-                }
-                VStack(spacing: 24) {
-                    Text("Subtitles").font(.title)
-                    Button("Off") { model.player.currentVideoSubTitleIndex = -1; tracks = false }
-                    ForEach(model.subtitleTracks, id: \.0) { track in Button(track.1) { model.player.currentVideoSubTitleIndex = track.0; tracks = false } }
-                }
-            }.padding(60)
-        }
+        .sheet(isPresented: $tracks, onDismiss: { reveal() }) { playbackPanel }
         .sheet(isPresented: $nextSheet) {
             VStack(spacing: 24) {
                 Text("Next episode").font(.title)
@@ -256,6 +251,98 @@ struct PlayerScreen: View {
             }.padding(60)
         }
         .fullScreenCover(item: $nextRequest, onDismiss: { dismiss() }) { request in PlayerScreen(request: request, library: library) }
+    }
+    private func touch() { lastInteraction = Date() }
+    private func reveal() { controls = true; touch() }
+
+    private var transport: some View {
+        VStack(alignment: .leading, spacing: 20) {
+            Spacer()
+            Text(model.request.media.name).font(.system(size: 44, weight: .bold))
+            if let episode = model.request.episode { Text("\(episode.label) · \(episode.title ?? "")").foregroundStyle(.secondary) }
+            if model.duration == 0 { ProgressView("Buffering…") }
+            HStack(spacing: 24) {
+                Button { model.toggle(); touch() } label: { Image(systemName: model.playing ? "pause.fill" : "play.fill") }
+                    .focused($transportFocus, equals: "play").accessibilityLabel(model.playing ? "Pause" : "Play")
+                Text(time(preview ?? model.position)).monospacedDigit().frame(width: 130)
+                Button {
+                    if let target = preview { model.seek(to: target); preview = nil }
+                    else { preview = model.position }
+                    touch()
+                } label: {
+                    VStack(spacing: 10) {
+                        ProgressView(value: min(1, (preview ?? model.position) / max(1, model.duration))).tint(.red)
+                        Text(preview == nil ? "Select to seek" : "← / → seek · Select to play · Back to cancel").font(.caption2)
+                    }.frame(maxWidth: .infinity).padding(.vertical, 12)
+                }
+                .focused($transportFocus, equals: "timeline")
+                .disabled(model.duration <= 0 || !model.player.isSeekable)
+                .onMoveCommand { direction in
+                    guard direction == .left || direction == .right else { return }
+                    preview = max(0, min(model.duration - 0.5, (preview ?? model.position) + (direction == .left ? -10 : 10)))
+                    touch()
+                }
+                Text("−" + time(max(0, model.duration - (preview ?? model.position)))).monospacedDigit().frame(width: 130)
+            }
+            HStack(spacing: 24) {
+                Button { model.seek(to: model.position - 10); touch() } label: { Image(systemName: "gobackward.10") }.accessibilityLabel("Back 10 seconds")
+                Button { model.seek(to: model.position + 10); touch() } label: { Image(systemName: "goforward.10") }.accessibilityLabel("Forward 10 seconds")
+                Button("Audio, subtitles & playback") { preview = nil; tracks = true; touch() }
+                if nextEpisode != nil { Button("Next episode") { loadNext() } }
+                Spacer()
+                Button("Close") { dismiss() }
+            }.font(.system(size: 23))
+        }.padding(60)
+        .background(LinearGradient(stops: [.init(color: .clear, location: 0.35), .init(color: .black.opacity(0.95), location: 1)], startPoint: .top, endPoint: .bottom))
+    }
+
+    @ViewBuilder private var skipButtons: some View {
+        if let intro = model.segments?.intro(at: model.position, duration: model.duration), model.player.isSeekable {
+            Button("Skip Intro") { model.seek(to: intro.end); touch() }
+        }
+        if let segments = model.segments, let outro = segments.outro(at: model.position, duration: model.duration), model.player.isSeekable {
+            Button("Skip Outro / Credits") { model.seek(to: segments.outroDestination(outro)); touch() }
+            if !controls && nextEpisode != nil { Button("Next Episode") { loadNext() } }
+        }
+    }
+
+    private var playbackPanel: some View {
+        VStack(alignment: .leading, spacing: 30) {
+            Text(model.request.media.name).font(.title.bold())
+            Picker("Playback settings", selection: $panel) {
+                ForEach(["Info", "Audio", "Subtitles", "Playback"], id: \.self) { Text($0).tag($0) }
+            }.pickerStyle(.segmented)
+            ScrollView {
+                VStack(alignment: .leading, spacing: 24) {
+                    if panel == "Info" {
+                        Text(model.request.episode?.label ?? "Movie").font(.headline)
+                        Text(model.request.media.facts).foregroundStyle(.secondary)
+                        Text(model.request.episode?.overview ?? model.request.media.description ?? "No synopsis available.")
+                        Text("Intro/outro timing: IntroDB · Buttons appear only when timing is available for this title. Release timings can vary.").font(.caption).foregroundStyle(.secondary)
+                    } else if panel == "Audio" {
+                        if model.audioTracks.isEmpty { Text("No selectable audio tracks.") }
+                        ForEach(model.audioTracks, id: \.0) { track in
+                            Button((model.player.currentAudioTrackIndex == track.0 ? "✓ " : "") + track.1) { model.player.currentAudioTrackIndex = track.0; tracks = false }
+                        }
+                    } else if panel == "Subtitles" {
+                        Button(model.player.currentVideoSubTitleIndex == -1 ? "✓ Off" : "Off") { model.player.currentVideoSubTitleIndex = -1; tracks = false }
+                        ForEach(model.subtitleTracks.filter { $0.0 >= 0 }, id: \.0) { track in
+                            Button((model.player.currentVideoSubTitleIndex == track.0 ? "✓ " : "") + track.1) { model.player.currentVideoSubTitleIndex = track.0; tracks = false }
+                        }
+                    } else {
+                        Text("Playback speed").font(.headline)
+                        HStack(spacing: 24) {
+                            ForEach([Float(0.5), 0.75, 1, 1.25, 1.5, 2], id: \.self) { speed in
+                                Button((model.speed == speed ? "✓ " : "") + String(format: "%g×", Double(speed))) { model.setSpeed(speed) }
+                            }
+                        }
+                        if nextEpisode != nil { Button("Next episode") { tracks = false; loadNext() } }
+                    }
+                }.frame(maxWidth: .infinity, alignment: .leading).padding(30)
+            }
+            Button("Back to video") { tracks = false }
+        }.padding(60)
+        .onExitCommand { tracks = false }
     }
     private func loadNext() {
         guard let nextEpisode else { return }
