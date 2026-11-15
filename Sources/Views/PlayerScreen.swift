@@ -21,6 +21,8 @@ import VLCKitSPM
     @Published var startupTarget: Int64 = 0
     @Published var cacheLimitGB: Int
     @Published var decodedFrames = 0
+    private var observedInputBytes = 0
+    private var observedCodecs = ""
     private var statusTask: Task<Void, Never>?
     private var openedAt: Date?
     private var torrentOpened = false
@@ -138,6 +140,7 @@ import VLCKitSPM
             await engine.setCacheLimit(gigabytes: next)
             if player.state == .error {
                 error = nil; transportIssue = nil; openedAt = Date(); resumeApplied = false
+                observedInputBytes = 0; decodedFrames = 0; observedCodecs = ""
                 player.stop(); player.play()
             }
         }
@@ -162,7 +165,8 @@ import VLCKitSPM
         let state = playerState
         if let media = player.media {
             let stats = media.statistics
-            decodedFrames = Int(stats.decodedVideo)
+            observedInputBytes = max(observedInputBytes, Int(stats.readBytes))
+            decodedFrames = max(decodedFrames, Int(stats.decodedVideo))
             let tracks = media.tracksInformation.compactMap { item -> String? in
                 guard let row = item as? [String: Any],
                       let codec = row[VLCMediaTracksInformationCodec] as? NSNumber,
@@ -171,9 +175,10 @@ import VLCKitSPM
                 let fourCC = String(bytes: (0..<4).map { UInt8((value >> ($0 * 8)) & 255) }, encoding: .ascii) ?? "unknown"
                 return "\(type): \(fourCC)"
             }.joined(separator: " · ")
-            diagnostics = "VLC: \(state) · Input \(stats.readBytes) bytes · Video \(stats.decodedVideo) decoded / \(stats.displayedPictures) displayed · Audio \(stats.decodedAudio) decoded\n\(tracks)"
+            if !tracks.isEmpty { observedCodecs = tracks }
+            diagnostics = "VLC: \(state) · Input observed \(observedInputBytes) bytes · Video \(decodedFrames) decoded / \(stats.displayedPictures) displayed · Audio \(stats.decodedAudio) decoded\n\(observedCodecs)"
             if player.state == .error {
-                error = stats.readBytes == 0
+                error = observedInputBytes == 0
                     ? "VLC could not read media bytes. Check the source or network. This does not establish a codec failure."
                     : "VLC received data but could not continue playback. The stream, container or decoder may have failed; see diagnostics below."
             }
