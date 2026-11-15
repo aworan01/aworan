@@ -168,6 +168,7 @@ struct PlayerScreen: View {
     @State private var loadingNext = false
     @State private var nextRequest: PlaybackRequest?
     @State private var nextSheet = false
+    @State private var nextAfterPanel = false
     private let library: LibraryStore
     private let timer = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
     init(request: PlaybackRequest, library: LibraryStore) {
@@ -233,8 +234,11 @@ struct PlayerScreen: View {
         }
         .onChange(of: scenePhase) { phase in if phase != .active { model.pause() } }
         .onDisappear { model.close() }
-        .sheet(isPresented: $tracks, onDismiss: { reveal() }) { playbackPanel }
-        .sheet(isPresented: $nextSheet) {
+        .sheet(isPresented: $tracks, onDismiss: {
+            reveal()
+            if nextAfterPanel { nextAfterPanel = false; loadNext() }
+        }) { playbackPanel }
+        .sheet(isPresented: $nextSheet, onDismiss: { reveal() }) {
             VStack(spacing: 24) {
                 Text("Next episode").font(.title)
                 if loadingNext { ProgressView() }
@@ -275,7 +279,7 @@ struct PlayerScreen: View {
                 } label: {
                     VStack(spacing: 10) {
                         ProgressView(value: min(1, (preview ?? model.position) / max(1, model.duration))).tint(.red)
-                        Text(preview == nil ? "Select to seek" : "← / → seek · Select to play · Back to cancel").font(.caption2)
+                        Text(preview == nil ? "Select to seek" : "← / → seek · Select to confirm · Back to cancel").font(.caption2)
                     }.frame(maxWidth: .infinity).padding(.vertical, 12)
                 }
                 .focused($transportFocus, equals: "timeline")
@@ -339,7 +343,7 @@ struct PlayerScreen: View {
                                 Button((model.speed == speed ? "✓ " : "") + String(format: "%g×", Double(speed))) { model.setSpeed(speed) }
                             }
                         }
-                        if nextEpisode != nil { Button("Next episode") { tracks = false; loadNext() } }
+                        if nextEpisode != nil { Button("Next episode") { nextAfterPanel = true; tracks = false } }
                     }
                 }.frame(maxWidth: .infinity, alignment: .leading).padding(30)
             }
