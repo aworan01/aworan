@@ -22,6 +22,7 @@ checkout() {
   [[ "$(git -C "$directory" rev-parse HEAD)" == "$sha" ]] || { echo "Unexpected dependency revision: $directory" >&2; exit 1; }
 }
 checkout https://github.com/arvidn/libtorrent.git v2.0.11 9d7443f467147d1784fb7516d2a882db1abb5a8b "$VENDOR/libtorrent"
+git -C "$VENDOR/libtorrent" submodule update --init --recursive --depth 1
 checkout https://github.com/openssl/openssl.git openssl-3.5.9 45e844fa2a14ec92d146bd8f5778ac130b6625fb "$VENDOR/openssl"
 if [[ ! -d "$VENDOR/boost_1_85_0" ]]; then
   curl --fail --location --retry 3 https://archives.boost.io/release/1.85.0/source/boost_1_85_0.tar.gz -o "$VENDOR/boost.tar.gz"
