@@ -45,9 +45,9 @@ mkdir -p "$OPENSSL_BUILD"
 (
   cd "$OPENSSL_BUILD"
   CC="$(xcrun --sdk "$SDK" --find clang)" \
+  CFLAGS="-target $TRIPLE -isysroot $SYSROOT -fPIC" \
   "$VENDOR/openssl/Configure" watchly-tvos no-shared no-tests no-apps no-ui-console no-module no-dso no-asm \
-    --prefix="$OPENSSL_INSTALL" --libdir=lib \
-    "-target" "$TRIPLE" "-isysroot" "$SYSROOT" "-fPIC"
+    --prefix="$OPENSSL_INSTALL" --libdir=lib
   make -j "$JOBS"
   make install_sw
 )

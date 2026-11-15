@@ -19,14 +19,41 @@ jobs:
       - name: Install build tools
         run: brew install cmake ninja xcodegen
       - name: Show toolchain
+        id: toolchain
         run: |
           xcodebuild -version
           xcrun --sdk appletvos --show-sdk-version
+          echo "xcode=$(xcodebuild -version | shasum -a 256 | cut -c1-16)" >> "$GITHUB_OUTPUT"
       - name: Test core logic
         run: swift test
       - name: Test IPA packaging
         run: python3 -m unittest discover -s scripts/tests -v
-      - name: Build native libraries and IPA
+      - name: Restore native library cache
+        id: native-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            vendor/native
+            Resources/cacert.pem
+            Resources/Licenses/OpenSSL.txt
+            Resources/Licenses/Boost.txt
+          key: ${{ runner.os }}-${{ runner.arch }}-tvos-native-v1-${{ steps.toolchain.outputs.xcode }}-${{ hashFiles('Native/**', 'scripts/build-native.sh') }}
+      - name: Build native libraries
+        if: steps.native-cache.outputs.cache-hit != 'true'
+        run: bash scripts/build-native.sh appletvos
+      - name: Save native library cache
+        if: steps.native-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            vendor/native
+            Resources/cacert.pem
+            Resources/Licenses/OpenSSL.txt
+            Resources/Licenses/Boost.txt
+          key: ${{ steps.native-cache.outputs.cache-primary-key }}
+      - name: Build Apple TV app and IPA
+        env:
+          WATCHLY_SKIP_NATIVE: '1'
         run: bash scripts/build-ipa.sh
       - name: Upload unsigned IPA
         uses: actions/upload-artifact@v4
