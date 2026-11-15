@@ -28,6 +28,8 @@ targets:
       path: build/Info.plist
       properties:
         CFBundleDisplayName: Watchly
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         LSRequiresIPhoneOS: true
         UILaunchScreen: {}
         NSLocalNetworkUsageDescription: Watchly discovers torrent peers and streams video on your network.

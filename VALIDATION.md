@@ -13,7 +13,15 @@ Prepared for Apple TV 4K (2022), tvOS 16+.
 
 The first GitHub Actions run (43664801270) failed before any build steps started. GitHub reported failed account payments or a spending-limit restriction. This is an account/runner startup failure, not a compiler result.
 
-The Swift tests, Objective-C++/Swift compilation, dependency linking and IPA generation remain unverified until a macOS runner starts successfully.
+After the user authorized public visibility, the macOS build ran successfully:
+
+- Run: https://github.com/aworan01/aworan/actions/runs/43667091979
+- Source commit: `3d23bef`
+- Four Swift core tests and three packaging tests passed.
+- OpenSSL, libtorrent and the Objective-C++ bridge compiled for ARM64 tvOS.
+- The full SwiftUI app compiled and linked successfully with VLCKit.
+- An unsigned IPA was generated and downloaded; ZIP integrity, ARM64 executable, physical AppleTVOS platform, device family 3 and tvOS 16.0 deployment target were verified.
+- Inspection found the generated bundle version defaulted to 1.0; a follow-up build makes the bundle use the configured 0.1.0 preview version explicitly.
 
 No physical Apple TV installation or playback test has been performed.
 
