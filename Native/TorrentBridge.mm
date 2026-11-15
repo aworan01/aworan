@@ -73,7 +73,8 @@ static void Report(NSError **error, std::string const& text) {
             "router.bittorrent.com:6881,router.utorrent.com:6881,dht.transmissionbt.com:6881");
         settings.set_bool(lt::settings_pack::enable_dht, true);
         settings.set_int(lt::settings_pack::connections_limit, 100);
-        settings.set_int(lt::settings_pack::alert_mask, int(lt::alert_category::error | lt::alert_category::storage | lt::alert_category::status));
+        settings.set_int(lt::settings_pack::alert_mask,
+            static_cast<int>(static_cast<std::uint32_t>(lt::alert_category::error | lt::alert_category::storage | lt::alert_category::status)));
         NSString *certificates = [[NSBundle mainBundle] pathForResource:@"cacert" ofType:@"pem"];
         if (certificates) setenv("SSL_CERT_FILE", certificates.UTF8String, 1);
         _session = std::make_unique<lt::session>(lt::session_params(settings));
